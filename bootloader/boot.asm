@@ -1,14 +1,16 @@
 .att_syntax
 .code16
 
-.section boot
 .text
-.org 0x0 # start all addresses at 0x0 TODO(nix3l): shouldnt this be 0x7c00?
+.org 0x0 # start all addresses at 0x0
+         # this is not at 0x7c00 since thats where the bootloader is loaded in memory
+         # not its address in the disk file
 
 .global boot_enter 
 boot_enter:
     jmp main
     nop
+
 # https://osdev.wiki/wiki/FAT#BPB_(BIOS_Parameter_Block):
 # https://jdebp.uk/FGA/bios-parameter-block.html
 # https://averstak.tripod.com/fatdox/bootsec.htm [ <-- this one is the easiest do decipher ]
@@ -46,7 +48,7 @@ boot_parameter_block:
 #   => clear the cpu prefetch queue
 #   => pass control over to the kernel
 
-# ds:si => points to string
+# si => points to string
 print_str:
 	push %si
 	push %ax
@@ -58,8 +60,10 @@ print_str:
 	jz .done
 
 	mov $0x0E, %ah
-	mov $0, %bh
+	mov $9, %bx
 	int $0x10
+
+    jmp .loop
 
 .done:
 	pop %bx
@@ -75,10 +79,10 @@ main:
     mov %ax, %ds #
     mov %ax, %es # cant set es/ds directly, have to do it using ax
     mov %ax, %ss # sets all these to 0x0, because we cant trust the BIOS
-    mov $0x07c00, %sp # set the stack to go down from 0x07c00 (where the boot sector is loaded)
+    mov $0x7c00, %sp # set the stack to go down from 0x7c00 (where the boot sector is loaded)
     sti
 
-	mov msg_greet, %si
+	lea msg_greet, %si
 	call print_str
 
     # resetting the disk system
@@ -91,7 +95,7 @@ main:
 halt:
 	jmp halt
 
-msg_greet: .asciz "HELLO!!!!!!\n"
+msg_greet: .asciz "HELLO!!!!!!"
 
 .org 510
 .word 0xaa55 # magic word
