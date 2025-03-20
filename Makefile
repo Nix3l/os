@@ -14,6 +14,8 @@ BUILD_DIR := build
 
 all: run clean
 
+dirty: clean run
+
 ${BUILD_DIR}/boot.o: bootloader/boot.asm
 	${ASM} $^ -o ${BUILD_DIR}/boot.o
 
@@ -30,7 +32,7 @@ ${BUILD_DIR}/os.img: ${BUILD_DIR}/boot.bin
 	dd if=/dev/zero of=$@ bs=512 count=2880
 	mkfs.fat -F 12 -n "VOLUME" $@
 	dd if=$< of=$@ conv=notrunc
-	
+
 run: ${BUILD_DIR}/os.img
 	${QEMU} ${VM_FLAGS} -fda $<
 
