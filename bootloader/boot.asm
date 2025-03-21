@@ -39,14 +39,14 @@ boot_parameter_block:
     pFSType: 		    .ascii "FAT12   " 	    # file system type
 
 # NOTE(nix3l): essentially we have to:
-#   => reset the floppy disk system TODO(nix3l): ???
-#   => find the kernel in the root directory of the floppy disk
-#   => read the kernel from disk into memory
-#   => enable the A20-line
-#   => setup the IDT and GDT tables
-#   => switch to protected (32-bit) mode
-#   => clear the cpu prefetch queue
-#   => pass control over to the kernel
+#   => reset the floppy disk system TODO(nix3l): ???                    [DONE]
+#   => find the kernel in the root directory of the floppy disk         [IN PROGRESS]
+#   => read the kernel from disk into memory                            [PENDING]
+#   => enable the A20-line                                              [PENDING]
+#   => setup the IDT and GDT tables                                     [PENDING]
+#   => switch to protected (32-bit) mode                                [PENDING]
+#   => clear the cpu prefetch queue                                     [PENDING]
+#   => pass control over to the kernel                                  [PENDING]
 
 # converts from LBA (logical block addressing) to CHS (cylinder, head, sector)
 # so it can actually be used for read/write operations
@@ -104,6 +104,12 @@ print_str:
 	pop %si
 	ret
 
+# called whenever we fail to find the kernel
+boot_failure:
+    lea msg_boot_fail, %si
+    call print_str
+    jmp hang
+
 # resets the disk
 reset_disk:
     push %ds
@@ -116,6 +122,8 @@ reset_disk:
     ret
 
 # reads a sector at the given LBA sector
+# TODO(nix3l): error detection
+#
 # INPUTS:
 #   ax => sector LBA to read
 # OUTPUTS:
@@ -179,6 +187,45 @@ get_root_size:
     pop %dx
     ret
 
+# reads the root directory and looks through all entires for a file
+# that has a filename matching the kernels file name
+# INPUTS:
+#   ax => sector LBA
+#   bx => root directory size
+find_kernel_file:
+    push %cx
+    push %bx
+    push %ax
+    
+    xor %bx, %bx
+    call read_sector
+
+check_sector:
+    mov $11, %cx
+    mov %bx, %di
+    lea kernel_filename, %si
+    repz cmpsb
+    je found_kernel_file
+    add $32, %bx
+    cmp pSectorSize, %bx
+    jge check_sector
+    pop %ax
+    inc %ax
+    pop %bx
+    pop %cx
+    loopnz find_kernel_file
+    jmp boot_failure
+
+found_kernel_file:
+    lea msg_greet, %si
+    call print_str
+    mov %es:+0x1a(%bx), %ax
+    mov %ax, kernel_start
+    pop %ax
+    pop %bx
+    pop %cx
+    ret
+
 main:
     # ensure that interrupts dont mess up our sector definitions
     cli
@@ -205,15 +252,22 @@ main:
     call get_root_size
     mov %bx, root_size
 
-	# TODO(nix3l): find out how to read the filesystem
-	# read the kernel from disk into memory
+    call find_kernel_file
+
+    # TODO(nix3l): read the root directory and find the kernel file
+    #              OR i could just assume its the first file in the filesystem
+
 hang:
 	jmp hang
 
 root_start_sector: .word 0
 root_size: .word 0
 
+kernel_filename: .ascii "kernel.bin"
+kernel_start: .word 0
+
 msg_greet: .asciz "HELLO!!!!!!\r\n"
+msg_boot_fail: .asciz "failed to find kernel.bin...\r\n"
 
 .org 510
 .word 0xaa55 # magic word
