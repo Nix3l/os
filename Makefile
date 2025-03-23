@@ -16,6 +16,8 @@ all: run clean
 
 dirty: clean run
 
+debug: clean bochs
+
 ${BUILD_DIR}/boot.o: bootloader/boot.asm
 	${ASM} $^ -o ${BUILD_DIR}/boot.o
 
@@ -35,6 +37,9 @@ ${BUILD_DIR}/os.img: ${BUILD_DIR}/boot.bin
 
 run: ${BUILD_DIR}/os.img
 	${QEMU} ${VM_FLAGS} -fda $<
+
+bochs: ${BUILD_DIR}/os.img
+	bochs -q -f bochs_config -debugger
 
 clean:
 	rm -f ${BUILD_DIR}/*.o ${BUILD_DIR}/*.bin ${BUILD_DIR}/*.out

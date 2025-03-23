@@ -59,22 +59,25 @@ boot_parameter_block:
 #   ax => LBA sector
 # OUTPUTS:
 #   ax => cylinder
-#   bx => head
+#   bl => head
 #   cx => sector 
 lda_to_chs:
     push %dx
 
     xor %dx, %dx
     mov pSectorsPerTrack, %bx
-    div %bx # LBA / sectors per track
+    div %bx # ax = LBA / sectors per tracl
+            # dx = remainder
 
     inc %dx
     mov %dx, %cx # remainder + 1 = sector
 
-    mov pHeadCount, %bx
     xor %dx, %dx
-    div %bx # (LBA / sectors per track) / number of heads
-    mov %dx, %bx
+    mov pHeadCount, %bx
+    div %bx # ax = (LBA / sectors per track) / number of heads
+            # dx = remainder
+
+    mov %dl, %bl
 
     pop %dx
     ret
@@ -87,18 +90,18 @@ print_str:
 	push %ax
 	push %bx
 
-.loop:
+.print_loop:
 	lodsb # load next char in ax
 	or %al, %al # if char null
-	jz .done
+	jz .print_done
 
 	mov $0x0e, %ah # teletype output mode
 	mov $9, %bx # page 0, color white
 	int $0x10
 
-    jmp .loop
+    jmp .print_loop
 
-.done:
+.print_done:
 	pop %bx
 	pop %ax
 	pop %si
@@ -112,18 +115,17 @@ boot_failure:
 
 # resets the disk
 reset_disk:
-    push %ds
+    push %dx
     push %ax
     mov pBootDrive, %dl
 	xor %ax, %ax
     int $0x13
     pop %ax
-    pop %ds
+    pop %dx
     ret
 
 # reads a sector at the given LBA sector
-# TODO(nix3l): error detection
-#
+# retries 3 times before failing
 # INPUTS:
 #   ax => sector LBA to read
 # OUTPUTS:
@@ -132,29 +134,56 @@ read_sector:
     push %ax
     push %bx
     push %cx
+    push %dx
+    push %di
 
     call lda_to_chs
 
     mov %al, %ch # set cylinder to al
     mov %bl, %dh # set the head to bl
-    mov pBootDrive, %dl
+    mov pBootDrive, %dl # set the drive
 
+    pop %bx
     mov %ax, 0x0201 # sets ah to 0x02 and al to 0x01
                     # function 2 (read) and 1 sector to read
-    pop %bx
-    int $0x13
 
+    mov $3, %di # allow 3 retries before failure
+
+.read_retry:
+    pusha # save all registers to stack, dont know what will happen to them
+    stc # set the carry bit
+
+    int $0x13
+    jnc .read_done # if the carry bit is cleared, read success
+
+    popa # otherwise, restore all registers
+    call reset_disk
+
+    dec %di
+    test %di, %di
+    jnz .read_retry # retry 3 times before failing
+
+.read_fail:
+    lea msg_read_sector_fail, %si
+    call print_str
+    jmp hang
+
+.read_done:
+    popa
+    pop %di
+    pop %dx
     pop %cx
     pop %ax
     ret
 
 # gets the position (LBA) of the root directory on disk
 # root sector = number of FATs * size of each FAT in sectors +
-#               number of reserved sectors +
+#               number of reserved sectors
 #               number of hidden sectors
 # OUTPUTS:
 #   ax => root sector LBA
 get_root_sector:
+    push %bx
     xor %ax, %ax
 
     mov pFATCount, %al
@@ -163,15 +192,16 @@ get_root_sector:
 
     add pHiddenSectors, %ax # + hidden sectors
     add pReservedSectors, %ax # + reserved sectors
+    pop %bx
     ret
 
 # gets the size of the root directory in sectors
 # root directory size = (32 * number of entries) / 512
 # OUTPUTS:
-#   bx => size of the root directory in sectors
+#   ax => size of the root directory in sectors
 get_root_size:
     push %dx
-    push %ax
+    push %bx
 
     xor %ax, %ax
     xor %dx, %dx
@@ -180,50 +210,59 @@ get_root_size:
     mov $32, %bx
     mul %bx # 32 * root size
 
+    xor %dx, %dx
     mov pSectorSize, %bx
     div %bx # (32 * root size) / 512
 
-    pop %ax
+    pop %bx
     pop %dx
     ret
+
+# TODO(nix3l): my head hurts what is this
 
 # reads the root directory and looks through all entires for a file
 # that has a filename matching the kernels file name
 # INPUTS:
 #   ax => sector LBA
-#   bx => root directory size
+#   cx => root directory size in sectors
 find_kernel_file:
-    push %cx
-    push %bx
+.check_sector:
+    push %ecx
     push %ax
-    
-    xor %bx, %bx
-    call read_sector
 
-check_sector:
-    mov $11, %cx
-    mov %bx, %di
+    xor %bx, %bx
+    call read_sector # read the sector into memory [es:bx]
+
+.check_entry:
+    mov $11, %ecx # check the first 11 bytes (filename)
+    mov %bx, %di # at the address bx
     lea kernel_filename, %si
     repz cmpsb
-    je found_kernel_file
-    add $32, %bx
-    cmp pSectorSize, %bx
-    jge check_sector
-    pop %ax
-    inc %ax
-    pop %bx
-    pop %cx
-    loopnz find_kernel_file
-    jmp boot_failure
+    je .found_kernel_file # if the filename is equal to the kernels filename
 
-found_kernel_file:
-    lea msg_greet, %si
+    add $32, %bx # each entry is 32 bytes, so move up memory by that amount
+    cmp %bx, pSectorSize # check if we are done with the current sector
+    lea msg_entry_fail, %si
+    call print_str
+    jne .check_entry # if still in same sector, check next entry
+
+    pop %ax
+    inc %ax # check the next sector LBA
+    pop %ecx
+    lea msg_read_fail, %si
+    call print_str
+    loopnz .check_sector
+
+    jmp boot_failure # if we were unable to find the kernel fail, boot failed
+
+.found_kernel_file:
+    lea msg_kernel_found, %si
     call print_str
     mov %es:+0x1a(%bx), %ax
-    mov %ax, kernel_start
-    pop %ax
-    pop %bx
+    mov %ax, kernel_start # store the memory address in kernel_start
     pop %cx
+    pop %bx
+    pop %ax
     ret
 
 main:
@@ -250,7 +289,10 @@ main:
     mov %ax, root_start_sector
 
     call get_root_size
-    mov %bx, root_size
+    mov %ax, root_size
+
+    mov root_start_sector, %ax
+    mov root_size, %cx
 
     call find_kernel_file
 
@@ -267,7 +309,11 @@ kernel_filename: .ascii "kernel.bin"
 kernel_start: .word 0
 
 msg_greet: .asciz "HELLO!!!!!!\r\n"
-msg_boot_fail: .asciz "failed to find kernel.bin...\r\n"
+msg_read_sector_fail: .asciz "read sector fail\r\n"
+msg_read_fail: .asciz "read fail\r\n"
+msg_entry_fail: .asciz "entry fail\r\n"
+msg_boot_fail: .asciz "boot failure\r\n"
+msg_kernel_found: .asciz "found kernel\r\n"
 
 .org 510
 .word 0xaa55 # magic word
