@@ -7,7 +7,7 @@ romimage: file="/nix/store/jf008x0a03bgwqs808v2m0k79vw8pg89-bochs-3.0/share/boch
 vgaromimage: file="/nix/store/jf008x0a03bgwqs808v2m0k79vw8pg89-bochs-3.0/share/bochs/VGABIOS-lgpl-latest.bin"
 boot: floppy
 floppy_bootsig_check: disabled=0
-floppya: type=1_44, 1_44=build/os.img, status=inserted
+floppya: type=1_44, 1_44=build/disk.img, status=inserted
 # no floppyb
 ata0: enabled=true, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
 ata0-master: type=none

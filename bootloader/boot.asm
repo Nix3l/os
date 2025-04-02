@@ -24,7 +24,7 @@ boot_parameter_block:
     pSectorCount: 	    .word 2880              # number of sectors in the volume
     pMedia: 		    .byte 0xf0              # media descriptor byte
     pFATSize: 		    .word 9                 # size of each FAT
-    pSectorsPerTrack: 	.word 18                # sectors per track
+    pSectorsPerTrack: 	.word 18                # sectors per FAT
     pHeadCount: 	    .word 2                 # number of heads
     pHiddenSectors: 	.int  0                 # number of hidden sectors (in this case theres none)
     pSectors32: 	    .int  0                 # number of sectors over 32Mb (large sectors)
@@ -38,8 +38,8 @@ boot_parameter_block:
 
 # NOTE(nix3l): essentially we have to:
 #   => reset the floppy disk system TODO(nix3l): ???                    [DONE]
-#   => find the kernel in the root directory of the floppy disk         [IN PROGRESS]
-#   => read the kernel from disk into memory                            [PENDING]
+#   => find the second stage in the root directory of the floppy disk   [IN PROGRESS]
+#   => read the second stage from disk into memory                      [PENDING]
 #   => enable the A20-line                                              [PENDING]
 #   => setup the IDT and GDT tables                                     [PENDING]
 #   => switch to protected (32-bit) mode                                [PENDING]
@@ -56,28 +56,35 @@ boot_parameter_block:
 # INPUTS:
 #   ax => LBA sector
 # OUTPUTS:
-#   ax => cylinder
-#   bl => head
-#   cx => sector 
+#   chs_cylinder => cylinder
+#   chs_head => head
+#   chs_sector => sector 
 lda_to_chs:
+    push %ax
+    push %bx
+    push %cx
     push %dx
 
     xor %dx, %dx
     mov pSectorsPerTrack, %bx
-    div %bx # ax = LBA / sectors per tracl
+    div %bx # ax = LBA / sectors per track
             # dx = remainder
 
-    inc %dx
-    mov %dx, %cx # remainder + 1 = sector
+    inc %dl
+    mov %dl, chs_sector # remainder + 1 = sector
 
     xor %dx, %dx
     mov pHeadCount, %bx
     div %bx # ax = (LBA / sectors per track) / number of heads
             # dx = remainder
 
-    mov %dl, %bl
+    mov %dl, chs_head
+    mov %al, chs_cylinder
 
     pop %dx
+    pop %cx
+    pop %bx
+    pop %ax
     ret
 
 # prints a string to the console
@@ -118,6 +125,7 @@ reset_disk:
     mov pBootDrive, %dl
 	xor %ax, %ax
     int $0x13
+    jc boot_failure
     pop %ax
     pop %dx
     ret
@@ -126,38 +134,34 @@ reset_disk:
 # retries 3 times before failing
 # INPUTS:
 #   ax => sector LBA to read
+#   cx => number of sectors to read
 #   es:bx => memory address to load the memory into
 # OUTPUTS:
-#   es:bx => the 512 bytes of the read sector
-read_sector:
+#   es:bx => the start of the data read 
+read_sectors:
+.sector_loop:
+    push %di
+    mov $3, %di # allow 3 retries before failure
     push %ax
-    push %bx
     push %cx
     push %dx
-    push %di
 
     call lda_to_chs
 
-    mov %al, %ch # set cylinder to al
-    mov %bl, %dh # set the head to bl
+    # mov $0x0201, %ax # read function, read one sector
+    mov $0x02, %ah
+    mov $0x01, %al
+    mov chs_cylinder, %ch # set cylinder
+    mov chs_head, %dh # set head
+    mov chs_sector, %cl # set sector to read
     mov pBootDrive, %dl # set the drive
 
-    pop %bx
-    mov %ax, 0x0201 # sets ah to 0x02 and al to 0x01
-                    # function 2 (read) and 1 sector to read
-
-    mov $3, %di # allow 3 retries before failure
-
 .read_retry:
-    pusha # save all registers to stack, dont know what will happen to them
     stc # set the carry bit
-
     int $0x13
-    jnc .read_done # if the carry bit is cleared, read success
+    jnc .sector_done # if the carry bit is cleared, read success
 
-    popa # otherwise, restore all registers
     call reset_disk
-
     dec %di
     test %di, %di
     jnz .read_retry # retry 3 times before failing
@@ -165,19 +169,71 @@ read_sector:
 .read_fail:
     lea msg_read_sector_fail, %si
     call print_str
-    jmp hang
+    jmp boot_failure
 
-.read_done:
-    popa
-    pop %di
+.sector_done:
+    lea msg_read_sector, %si
+    call print_str
     pop %dx
     pop %cx
     pop %ax
+    inc %ax # move to the next sector's LBA
+    pop %di
+    add pSectorSize, %bx # advance the memory pointer by 1 sector
+    loop .sector_loop
+
+.read_done:
+    lea msg_read_finish, %si
+    call print_str
     ret
 
-load_second_stage:
-    # TODO(nix3l)
-    jmp hang
+find_second_stage:
+    # get the root directory size in sectors in cx
+    xor %ax, %ax
+    xor %dx, %dx
+    mov pRootSize, %ax
+    mov $32, %bx # 32 bytes per entry
+    mul %bx # 32 * [root size] entries
+    mov pSectorSize, %bx
+    div %bx # (32 * [root size] entries) / [sector size]
+    mov %ax, %cx # put result in cx
+
+    # get the root directory location in ax
+    xor %ax, %ax
+    mov pFATCount, %al
+    mov pFATSize, %bx
+    mul %bx # FAT size * FAT
+    add pHiddenSectors, %ax # + hidden sectors
+    add pReservedSectors, %ax # + reserved sectors (bootloader)
+    mov %ax, root_dir_location
+
+    mov $0x0200, %bx
+    call read_sectors
+
+    mov pRootSize, %cx # if we reach 0 entries, not found
+    mov $0x0200, %di # TODO(nix3l): ???
+
+.next_entry:
+    push %cx
+    mov $11, %cx # filenames are all exactly 11 chars long
+    mov stage2_filename, %si
+    push %di
+    rep cmpsb # check filename
+    pop %di
+    je .stage2_found
+    pop %cx
+    add $32, %di # move to the next entry
+                 # each entry is 32 bytes, so just move the pointer by 32 bytes
+    lea msg_check_entry, %si
+    call print_str
+    loop .next_entry
+    jmp boot_failure # if stage 2 was not found, boot has failed
+
+.stage2_found:
+    lea msg_stage2_found, %si
+    call print_str
+    # TODO(nix3l): do something here i guess
+    ret
 
 main:
     # ensure that interrupts dont mess up our sector definitions
@@ -187,7 +243,8 @@ main:
     mov %ax, %ds #
     mov %ax, %es # cant set es/ds directly, have to do it using ax
     mov %ax, %ss # sets all these to 0x0, because we cant trust the BIOS
-    mov $0x7c00, %sp # set the stack to go down from 0x7c00 (where the boot sector is loaded)
+    mov $0xFFFF, %sp # set the stack
+                     # TODO(nix3l): ???
     sti
 
     # change the vga mode
@@ -198,15 +255,26 @@ main:
 	call print_str
 
     call reset_disk
-    call load_second_stage
-
-    # TODO(nix3l): find the second stage
+    call find_second_stage
+    # call load_second_stage
 
 hang:
 	jmp hang
 
-msg_greet: .asciz "HELLO IN THE FIRST STAGE!!!!!!\r\n"
+chs_cylinder: .byte 0
+chs_head: .byte 0
+chs_sector: .byte 0
 
+root_dir_location: .word 0
+
+stage2_filename: .ascii "STAGE2  BIN"
+
+msg_greet: .asciz "H\r\n" #"HELLO IN THE FIRST STAGE!!!!!!\r\n"
+msg_stage2_found: .asciz "found stage 2\r\n"
+
+msg_check_entry: .asciz "checking next entry...\r\n"
+msg_read_sector: .asciz "read sector\r\n"
+msg_read_finish: .asciz "finished reading sectors\r\n"
 msg_boot_fail: .asciz "boot failure\r\n"
 msg_read_sector_fail: .asciz "read sector fail\r\n"
 
