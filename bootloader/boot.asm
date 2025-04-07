@@ -38,8 +38,8 @@ boot_parameter_block:
 
 # NOTE(nix3l): essentially we have to:
 #   => reset the floppy disk system TODO(nix3l): ???                    [DONE]
-#   => find the second stage in the root directory of the floppy disk   [IN PROGRESS]
-#   => read the second stage from disk into memory                      [PENDING]
+#   => find the second stage in the root directory of the floppy disk   [DONE]
+#   => read the second stage from disk into memory                      [IN PROGRESS]
 #   => enable the A20-line                                              [PENDING]
 #   => setup the IDT and GDT tables                                     [PENDING]
 #   => switch to protected (32-bit) mode                                [PENDING]
@@ -116,7 +116,9 @@ print_str:
 boot_failure:
     lea msg_boot_fail, %si
     call print_str
-    jmp hang
+    # jmp hang
+    int $0x16 # await keypress
+    int $0x19 # reboot (warm restart)
 
 # move reading cursor back to the first sector on disk
 reset_disk:
@@ -148,9 +150,7 @@ read_sectors:
 
     call lda_to_chs
 
-    # mov $0x0201, %ax # read function, read one sector
-    mov $0x02, %ah
-    mov $0x01, %al
+    mov $0x0201, %ax # read function, read one sector
     mov chs_cylinder, %ch # set cylinder
     mov chs_head, %dh # set head
     mov chs_sector, %cl # set sector to read
@@ -207,16 +207,15 @@ find_second_stage:
     add pReservedSectors, %ax # + reserved sectors (bootloader)
     mov %ax, root_dir_location
 
-    mov $0x0200, %bx
+    mov $0x0200, %bx # arbitrarily load it at 0x200
     call read_sectors
 
     mov pRootSize, %cx # if we reach 0 entries, not found
-    mov $0x0200, %di # TODO(nix3l): ???
-
-.next_entry:
+    mov $0x0200, %di # start at 0x0200 in memory
+.next_entry: # FIXME
     push %cx
     mov $11, %cx # filenames are all exactly 11 chars long
-    mov stage2_filename, %si
+    lea stage2_filename, %si
     push %di
     rep cmpsb # check filename
     pop %di
@@ -237,6 +236,7 @@ find_second_stage:
 
 main:
     # ensure that interrupts dont mess up our sector definitions
+    # and set up the stack
     cli
     mov %dl, pBootDrive # store our boot drive
     mov %cs, %ax #
@@ -248,7 +248,7 @@ main:
     sti
 
     # change the vga mode
-    mov $0x3, %ax
+    mov $0x0003, %ax
     int $0x10
 
 	lea msg_greet, %si
@@ -269,14 +269,15 @@ root_dir_location: .word 0
 
 stage2_filename: .ascii "STAGE2  BIN"
 
-msg_greet: .asciz "H\r\n" #"HELLO IN THE FIRST STAGE!!!!!!\r\n"
+msg_greet: .asciz "boot start\r\n"
 msg_stage2_found: .asciz "found stage 2\r\n"
 
-msg_check_entry: .asciz "checking next entry...\r\n"
+# TODO(nix3l): remove some of these, wastes space
+msg_check_entry: .asciz "next entry...\r\n"
 msg_read_sector: .asciz "read sector\r\n"
-msg_read_finish: .asciz "finished reading sectors\r\n"
-msg_boot_fail: .asciz "boot failure\r\n"
-msg_read_sector_fail: .asciz "read sector fail\r\n"
+msg_read_finish: .asciz "read finish\r\n"
+msg_boot_fail: .asciz "boot failure. press any key to reboot\r\n"
+msg_read_sector_fail: .asciz "read fail\r\n"
 
 .org 510
 .word 0xaa55 # magic word
