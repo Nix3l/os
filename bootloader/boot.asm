@@ -4,8 +4,8 @@
 .text
 .org 0x0
 
-.global boot_enter 
-boot_enter:
+.global enter
+enter:
     jmp main
     nop
 
@@ -16,7 +16,7 @@ boot_enter:
 # in this case the FAT12 filesystem is used
 boot_parameter_block:
     pOEM: 		        .ascii "nix3l   " 	    # OEM string, has to occupy 8 bytes
-    pSectorSize: 		.word 0x512 		    # size of sector (in bytes)
+    pSectorSize: 		.word 512 		        # size of sector (in bytes)
     pClusterSize: 	    .byte 1 		        # sectors per cluster (allocation unit)
     pReservedSectors: 	.word 1 		        # number of reserved sectors (only boot sector in this case)
     pFATCount: 		    .byte 2 		        # number of FATs
@@ -24,7 +24,7 @@ boot_parameter_block:
     pSectorCount: 	    .word 2880              # number of sectors in the volume
     pMedia: 		    .byte 0xf0              # media descriptor byte
     pFATSize: 		    .word 9                 # size of each FAT
-    pSectorsPerTrack: 	.word 18                # sectors per FAT
+    pSectorsPerTrack: 	.word 18                # sectors per cylinder
     pHeadCount: 	    .word 2                 # number of heads
     pHiddenSectors: 	.int  0                 # number of hidden sectors (in this case theres none)
     pSectors32: 	    .int  0                 # number of sectors over 32Mb (large sectors)
@@ -37,7 +37,7 @@ boot_parameter_block:
     pFSType: 		    .ascii "FAT12   " 	    # file system type
 
 # NOTE(nix3l): essentially we have to:
-#   => reset the floppy disk system TODO(nix3l): ???                    [DONE]
+#   => reset the floppy disk system                                     [DONE]
 #   => find the second stage in the root directory of the floppy disk   [DONE]
 #   => read the second stage from disk into memory                      [IN PROGRESS]
 #   => enable the A20-line                                              [PENDING]
@@ -59,7 +59,7 @@ boot_parameter_block:
 #   chs_cylinder => cylinder
 #   chs_head => head
 #   chs_sector => sector 
-lda_to_chs:
+lba_to_chs:
     push %ax
     push %bx
     push %cx
@@ -87,6 +87,22 @@ lda_to_chs:
     pop %ax
     ret
 
+# gets the cluster sector LBA
+# the formula is LBA = (cluster - 2) * sectors per cluster
+# INPUTS:
+#   ax => cluster
+# OUTPUTS:
+#   ax => sector LBA
+get_cluster_lba:
+    push %bx
+    sub $2, %ax
+    xor %bx, %bx
+    mov pClusterSize, %bl
+    mul %bx
+    pop %bx
+    add data_start, %ax
+    ret
+
 # prints a string to the console
 # INPUTS:
 #   si => points to string
@@ -112,11 +128,10 @@ print_str:
 	pop %si
 	ret
 
-# called whenever we fail to find the kernel
+# called whenever we fail to find the second stage
 boot_failure:
     lea msg_boot_fail, %si
     call print_str
-    # jmp hang
     int $0x16 # await keypress
     int $0x19 # reboot (warm restart)
 
@@ -140,7 +155,7 @@ reset_disk:
 #   es:bx => memory address to load the memory into
 # OUTPUTS:
 #   es:bx => the start of the data read 
-read_sectors:
+read_sectors: # FIXME(nix3l): for some reason if cx > 18 it just doesnt work??? ok
 .sector_loop:
     push %di
     mov $3, %di # allow 3 retries before failure
@@ -148,7 +163,7 @@ read_sectors:
     push %cx
     push %dx
 
-    call lda_to_chs
+    call lba_to_chs
 
     mov $0x0201, %ax # read function, read one sector
     mov chs_cylinder, %ch # set cylinder
@@ -167,13 +182,9 @@ read_sectors:
     jnz .read_retry # retry 3 times before failing
 
 .read_fail:
-    lea msg_read_sector_fail, %si
-    call print_str
     jmp boot_failure
 
 .sector_done:
-    lea msg_read_sector, %si
-    call print_str
     pop %dx
     pop %cx
     pop %ax
@@ -182,12 +193,34 @@ read_sectors:
     add pSectorSize, %bx # advance the memory pointer by 1 sector
     loop .sector_loop
 
-.read_done:
-    lea msg_read_finish, %si
-    call print_str
+    # finished reading
+    # lea msg_read_finish, %si
+    # call print_str
     ret
 
-find_second_stage:
+# loads a cluster into memory at es:bx
+# INPUTS:
+#   ax => cluster number
+#   es:bx => memory location to read to
+# OUTPUTS:
+#   es:bx => cluster sector data
+load_cluster:
+    push %ax
+    push %bx
+    push %cx
+    call get_cluster_lba
+    xor %cx, %cx
+    mov pClusterSize, %cl
+    call read_sectors
+    pop %cx
+    pop %bx
+    pop %ax
+    ret
+
+# loads the second stage from the disk
+# OUTPUTS:
+#   bx => address to the start of the second stage in memory
+load_second_stage:
     # get the root directory size in sectors in cx
     xor %ax, %ax
     xor %dx, %dx
@@ -203,16 +236,19 @@ find_second_stage:
     mov pFATCount, %al
     mov pFATSize, %bx
     mul %bx # FAT size * FAT
-    add pHiddenSectors, %ax # + hidden sectors
-    add pReservedSectors, %ax # + reserved sectors (bootloader)
-    mov %ax, root_dir_location
 
-    mov $0x0200, %bx # arbitrarily load it at 0x200
+    add pReservedSectors, %ax # + reserved sectors (bootloader)
+
+    mov %ax, %bx
+    add %cx, %bx
+    mov %bx, data_start
+
+    mov $0x0200, %bx
     call read_sectors
 
     mov pRootSize, %cx # if we reach 0 entries, not found
     mov $0x0200, %di # start at 0x0200 in memory
-.next_entry: # FIXME
+.next_entry:
     push %cx
     mov $11, %cx # filenames are all exactly 11 chars long
     lea stage2_filename, %si
@@ -223,15 +259,71 @@ find_second_stage:
     pop %cx
     add $32, %di # move to the next entry
                  # each entry is 32 bytes, so just move the pointer by 32 bytes
-    lea msg_check_entry, %si
-    call print_str
     loop .next_entry
     jmp boot_failure # if stage 2 was not found, boot has failed
 
 .stage2_found:
     lea msg_stage2_found, %si
     call print_str
-    # TODO(nix3l): do something here i guess
+
+    mov 26(%di), %ax
+    mov %ax, cluster # store the index of the first cluster
+
+    # read the FAT into memory
+    mov pFATSize, %cx # get size in cx
+    # get location of FAT in ax
+    # both tables are located immedately after all the reserved sectors
+    # so we can start reading from there
+    mov pReservedSectors, %ax
+
+    mov $0x0200, %bx # read it to 0x0200
+    call read_sectors
+
+    # read the cluster sectors into memory
+    # reading to address 0x1000
+    mov $0x1000, %bx
+.next_cluster:
+    mov cluster, %ax
+    call load_cluster
+    push %bx
+    mov %ax, %cx
+    mov %ax, %dx
+    shr $1, %dx # divide by 2 (shift right)
+    add %dx, %cx # cx = offset from 0x0200 to the cluster number
+
+    # next cluster in dx
+    mov $0x0200, %bx
+    add %cx, %bx
+    # gotta load each byte separately though i guess
+    mov %es:(%bx), %dl
+    mov %es:1(%bx), %dh
+
+    # what using FAT12 does
+    # have to mask the number, because we load 16 bits
+    # but only use the upper/lower 12 bits
+    test $0x0001, %ax
+    jnz .odd_cluster
+
+.even_cluster:
+    and $0b0000111111111111, %dx
+    jmp .load_cluster
+.odd_cluster:
+    shr $4, %dx
+.load_cluster:
+    mov %dx, cluster
+    cmp $0x0ff0, %dx
+    jge .finished_loading
+
+    pop %bx
+    # TODO(nix3l): technically this should be pSectorSize * pClusterSize
+    # but every cluster is only 1 sector already and that is never changing so who cares
+    add pSectorSize, %bx
+    jmp .next_cluster
+
+.finished_loading:
+    lea msg_greet, %si
+    call print_str
+    mov $0x1000, %bx
     ret
 
 main:
@@ -243,7 +335,7 @@ main:
     mov %ax, %ds #
     mov %ax, %es # cant set es/ds directly, have to do it using ax
     mov %ax, %ss # sets all these to 0x0, because we cant trust the BIOS
-    mov $0xFFFF, %sp # set the stack
+    mov $0xffff, %sp # set the stack
                      # TODO(nix3l): ???
     sti
 
@@ -255,8 +347,8 @@ main:
 	call print_str
 
     call reset_disk
-    call find_second_stage
-    # call load_second_stage
+    jmp load_second_stage
+    jmp %bx
 
 hang:
 	jmp hang
@@ -265,19 +357,15 @@ chs_cylinder: .byte 0
 chs_head: .byte 0
 chs_sector: .byte 0
 
-root_dir_location: .word 0
+data_start: .word 0
 
-stage2_filename: .ascii "STAGE2  BIN"
+stage2_filename: .ascii "LOADER  BIN"
+cluster: .word 0
 
-msg_greet: .asciz "boot start\r\n"
-msg_stage2_found: .asciz "found stage 2\r\n"
+msg_greet: .asciz "start\r\n"
+msg_stage2_found: .asciz "loader\r\n"
 
-# TODO(nix3l): remove some of these, wastes space
-msg_check_entry: .asciz "next entry...\r\n"
-msg_read_sector: .asciz "read sector\r\n"
-msg_read_finish: .asciz "read finish\r\n"
-msg_boot_fail: .asciz "boot failure. press any key to reboot\r\n"
-msg_read_sector_fail: .asciz "read fail\r\n"
+msg_boot_fail: .asciz "failure\r\n"
 
 .org 510
 .word 0xaa55 # magic word

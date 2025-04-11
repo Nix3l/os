@@ -20,21 +20,27 @@ dirty: clean run
 debug: clean bochs
 
 ${BUILD_DIR}/boot.o: bootloader/boot.asm
-	${ASM} $^ -o ${BUILD_DIR}/boot.o
+	${ASM} $^ -o $@
 
 ${BUILD_DIR}/boot.out: ${BUILD_DIR}/boot.o
-	${LD} -T ${LD_SCRIPT} $^ -o ${BUILD_DIR}/boot.out
+	${LD} -T ${LD_SCRIPT} $^ -o $@
 
 ${BUILD_DIR}/boot.bin: ${BUILD_DIR}/boot.out
 	${OBJCOPY} -O binary -j .text $< $@
 
-${BUILD_DIR}/stage2.bin:
-	touch $@
+${BUILD_DIR}/loader.o: bootloader/loader.asm
+	${ASM} $^ -o $@
 
-${BUILD_DIR}/disk.img: ${BUILD_DIR}/boot.bin ${BUILD_DIR}/stage2.bin
+${BUILD_DIR}/loader.out: ${BUILD_DIR}/loader.o
+	${LD} -T ${LD_SCRIPT} $^ -o $@
+
+${BUILD_DIR}/loader.bin: ${BUILD_DIR}/loader.out
+	${OBJCOPY} -O binary -j .text $< $@
+
+${BUILD_DIR}/disk.img: ${BUILD_DIR}/boot.bin ${BUILD_DIR}/loader.bin
 	dd if=/dev/zero of=$@ bs=512 count=2880
 	mkfs.fat -F12 -n "VOLUME" $@
-	mcopy -i $@ ${BUILD_DIR}/stage2.bin "::stage2.bin"
+	mcopy -i $@ ${BUILD_DIR}/loader.bin "::loader.bin"
 	dd if=$< of=$@ conv=notrunc # when this is done, for some reason it stops being considered a fat12 fs??? idk
 								# doing it after copying the files works so i dont really care to fix it
 

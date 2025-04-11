@@ -1,4 +1,4 @@
-ENTRY(boot_enter)
+ENTRY(enter)
 SECTIONS {
 	. = 0x7c00;
 	.text :
