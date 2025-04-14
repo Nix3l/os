@@ -31,8 +31,9 @@ print_str:
 
 main:
     cli
-    push %cs
-    pop %ds
+    mov %cs, %ax
+    mov %ax, %ds
+    sti
 
     # change the vga mode
     mov $0x0003, %ax
@@ -41,10 +42,7 @@ main:
     lea msg_greet, %si
     call print_str
 
-    cli
-    hlt
+hang:
+    jmp hang
 
 msg_greet: .asciz "AYOO!!! WE IN THE SECND STAGE!!!\r\n"
-
-.org 4096
-padding: .word 0xfafa

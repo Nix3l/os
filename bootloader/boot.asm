@@ -155,7 +155,7 @@ reset_disk:
 #   es:bx => memory address to load the memory into
 # OUTPUTS:
 #   es:bx => the start of the data read 
-read_sectors: # FIXME(nix3l): for some reason if cx > 18 it just doesnt work??? ok
+read_sectors:
 .sector_loop:
     push %di
     mov $3, %di # allow 3 retries before failure
@@ -263,9 +263,6 @@ load_second_stage:
     jmp boot_failure # if stage 2 was not found, boot has failed
 
 .stage2_found:
-    lea msg_stage2_found, %si
-    call print_str
-
     mov 26(%di), %ax
     mov %ax, cluster # store the index of the first cluster
 
@@ -280,9 +277,11 @@ load_second_stage:
     call read_sectors
 
     # read the cluster sectors into memory
-    # reading to address 0x1000
-    mov $0x1000, %bx
+    # reading to address 0x0000 segment 0x0050
+    mov $0x0000, %bx
 .next_cluster:
+    mov $0x0050, %ax
+    mov %ax, %es
     mov cluster, %ax
     call load_cluster
     push %bx
@@ -291,6 +290,10 @@ load_second_stage:
     shr $1, %dx # divide by 2 (shift right)
     add %dx, %cx # cx = offset from 0x0200 to the cluster number
 
+    push %ax
+    mov $0x0000, %ax
+    mov %ax, %es
+    pop %ax # TODO(nix3l): this is stupid
     # next cluster in dx
     mov $0x0200, %bx
     add %cx, %bx
@@ -310,11 +313,13 @@ load_second_stage:
 .odd_cluster:
     shr $4, %dx
 .load_cluster:
+    pop %bx
+
     mov %dx, cluster
     cmp $0x0ff0, %dx
+
     jge .finished_loading
 
-    pop %bx
     # TODO(nix3l): technically this should be pSectorSize * pClusterSize
     # but every cluster is only 1 sector already and that is never changing so who cares
     add pSectorSize, %bx
@@ -323,8 +328,11 @@ load_second_stage:
 .finished_loading:
     lea msg_greet, %si
     call print_str
-    mov $0x1000, %bx
-    ret
+
+    # hand over control to stage 2
+    push $0x0050
+    push $0x0000
+    retf # TODO(nix3l): ???
 
 main:
     # ensure that interrupts dont mess up our sector definitions
@@ -348,7 +356,6 @@ main:
 
     call reset_disk
     jmp load_second_stage
-    jmp %bx
 
 hang:
 	jmp hang
@@ -362,9 +369,7 @@ data_start: .word 0
 stage2_filename: .ascii "LOADER  BIN"
 cluster: .word 0
 
-msg_greet: .asciz "start\r\n"
-msg_stage2_found: .asciz "loader\r\n"
-
+msg_greet: .asciz "boot start\r\n"
 msg_boot_fail: .asciz "failure\r\n"
 
 .org 510

@@ -3,15 +3,13 @@ LD := i686-elf-ld
 ASM := i686-elf-as
 OBJCOPY := i686-elf-objcopy
 
-LD_SCRIPT := linker.ld
-
 # CC_FLAGS := -nostdlib -ffreestanding -T ${LD_SCRIPT} -fno-exceptions -mno-red-zone -Wall -Wextra -Werror -m32
 
 QEMU := qemu-system-i386
 VM_FLAGS := -cpu pentium3
 
+LD_SCRIPT_DIR := linker
 BUILD_DIR := build
-MOUNT_DIR := build/mount
 
 all: run clean
 
@@ -23,7 +21,7 @@ ${BUILD_DIR}/boot.o: bootloader/boot.asm
 	${ASM} $^ -o $@
 
 ${BUILD_DIR}/boot.out: ${BUILD_DIR}/boot.o
-	${LD} -T ${LD_SCRIPT} $^ -o $@
+	${LD} -T ${LD_SCRIPT_DIR}/boot.ld $^ -o $@
 
 ${BUILD_DIR}/boot.bin: ${BUILD_DIR}/boot.out
 	${OBJCOPY} -O binary -j .text $< $@
@@ -32,7 +30,7 @@ ${BUILD_DIR}/loader.o: bootloader/loader.asm
 	${ASM} $^ -o $@
 
 ${BUILD_DIR}/loader.out: ${BUILD_DIR}/loader.o
-	${LD} -T ${LD_SCRIPT} $^ -o $@
+	${LD} -T ${LD_SCRIPT_DIR}/loader.ld $^ -o $@
 
 ${BUILD_DIR}/loader.bin: ${BUILD_DIR}/loader.out
 	${OBJCOPY} -O binary -j .text $< $@
