@@ -1,33 +1,37 @@
 .att_syntax
 .code16
 
+# TODO(nix3l): move the IO stuff to a separate file so i dont copy-paste the code like an idiot
+
 .org 0x0
 
 .global enter
 enter:
     jmp main
 
-print_str:
+print_str16:
 	push %si
 	push %ax
 	push %bx
 
-.print_loop:
+.print16_loop:
 	lodsb # load next char in ax
 	or %al, %al # if char null
-	jz .print_done
+	jz .print16_done
 
 	mov $0x0e, %ah # teletype output mode
 	mov $9, %bx # page 0, color white
 	int $0x10
 
-    jmp .print_loop
+    jmp .print16_loop
 
-.print_done:
+.print16_done:
 	pop %bx
 	pop %ax
 	pop %si
 	ret
+
+msg_greet: .asciz "second stage loaded\r\n"
 
 main:
     cli
@@ -40,9 +44,75 @@ main:
     int $0x10
 
     lea msg_greet, %si
-    call print_str
+    call print_str16
+
+    # enter 32-bit protected mode
+    # we want interrupts off for this or the processor might triple fault
+    cli
+
+    lgdt gdt_pointer
+
+    # set the first bit in cr0,
+    # which informs the cpu that we are going to protected mode
+    mov %cr0, %eax
+    or $1, %eax
+    mov %eax, %cr0
+
+    # jump into 32bit protected mode
+    jmp $0x08, $enter_pm # FIXME
+                         # could be an emulator thing?
+
+# GDT
+# each descriptor is exactly 8 bytes in size (one quad word)
+
+# NOTE(nix3l): https://wiki.osdev.org/Global_Descriptor_Table
+# ngl i barely understand most of this stuff, its a bunch of standards and stuff
+# read the link ^^. might help i guess, but all i know is that this kind of segments the memory into
+# parts that can either be used as data or as code for execution. protected mode stuff.
+# explanation of the layout and usage of the segment descriptors is also in the given link.
+
+start_of_gdt:
+gdt_null_descriptor:
+# null descriptor
+# has to be all 0's
+.quad 0
+
+gdt_code_descriptor:
+# code descriptor
+.word 0xffff # limit low
+.word 0 # base low
+.byte 0 # base middle
+.byte 0b10011010 # access
+.byte 0b11001111 # granularity
+.byte 0 # base high
+
+gdt_data_descriptor:
+# data descriptor
+.word 0xffff # limit low
+.word 0 # base low
+.byte 0 # base middle
+.byte 0b10010010 # access
+.byte 0b11001111 # granularity
+.byte 0 # base high
+end_of_gdt:
+
+gdt_pointer:
+    .word end_of_gdt - start_of_gdt - 1
+    # took me a while to figure this out
+    # have to change to linear address from segment:offset
+    # we know this is loaded at 0x0500 so just add that and we are fine
+    .long 0x0500 + start_of_gdt
+
+# FROM HERE ON CODE IS IN 32-bit PROTECTED MODE!!!
+.code32
+enter_pm:
+    # put the data descriptor into the data segments
+    mov $0x10, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    mov %ax, %ss
+    # stack now starts at 0x90000
+    mov $0x90000, %esp
 
 hang:
     jmp hang
-
-msg_greet: .asciz "AYOO!!! WE IN THE SECND STAGE!!!\r\n"
