@@ -33,7 +33,7 @@ ${BUILD_DIR}/loader.out: ${BUILD_DIR}/loader.o
 	${LD} -T ${LD_SCRIPT_DIR}/loader.ld $^ -o $@
 
 ${BUILD_DIR}/loader.bin: ${BUILD_DIR}/loader.out
-	${OBJCOPY} -O binary -j .text $< $@
+	${OBJCOPY} -O binary -j .text $^ $@
 
 ${BUILD_DIR}/disk.img: ${BUILD_DIR}/boot.bin ${BUILD_DIR}/loader.bin
 	dd if=/dev/zero of=$@ bs=512 count=2880

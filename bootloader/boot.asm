@@ -41,10 +41,10 @@ boot_parameter_block:
 #   => find the second stage in the root directory of the floppy disk   [DONE]
 #   => read the second stage from disk into memory                      [DONE]
 #   => setup the GDT table                                              [DONE]
-#   => switch to protected (32-bit) mode                                [IN PROGRESS]
-#   => enable the A20-line                                              [PENDING]
-#   => clear the cpu prefetch queue                                     [PENDING]
-#   => pass control over to the kernel                                  [PENDING]
+#   => switch to protected (32-bit) mode                                [DONE]
+#   => clear the cpu prefetch queue                                     [DONE]
+#   => enable the A20-line                                              [DONE]
+#   => pass control over to the kernel                                  [IN PROGRESS]
 
 # converts from LBA (logical block addressing) to CHS (cylinder, head, sector)
 # so it can actually be used for read/write operations
