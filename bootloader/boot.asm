@@ -39,9 +39,9 @@ boot_parameter_block:
 # NOTE(nix3l): essentially we have to:
 #   => reset the floppy disk system                                     [DONE]
 #   => find the second stage in the root directory of the floppy disk   [DONE]
-#   => read the second stage from disk into memory                      [IN PROGRESS]
-#   => setup the IDT and GDT tables                                     [PENDING]
-#   => switch to protected (32-bit) mode                                [PENDING]
+#   => read the second stage from disk into memory                      [DONE]
+#   => setup the GDT table                                              [DONE]
+#   => switch to protected (32-bit) mode                                [IN PROGRESS]
 #   => enable the A20-line                                              [PENDING]
 #   => clear the cpu prefetch queue                                     [PENDING]
 #   => pass control over to the kernel                                  [PENDING]

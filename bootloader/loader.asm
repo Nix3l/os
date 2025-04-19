@@ -58,9 +58,9 @@ main:
     or $1, %eax
     mov %eax, %cr0
 
-    # jump into 32bit protected mode
-    jmp $0x08, $enter_pm # FIXME
-                         # could be an emulator thing?
+    # far jump into 32bit protected mode
+    # this clears the prefetch queue and sets cs to the code descriptor
+    ljmp $0x0008, $pm_gateway
 
 # GDT
 # each descriptor is exactly 8 bytes in size (one quad word)
@@ -77,10 +77,15 @@ gdt_null_descriptor:
 # has to be all 0's
 .quad 0
 
+# NOTE(nix3l): since this program has org 0, and is loaded at physical address 0x0500,
+# we have to change the base address of the gdt so that it jumps to the correct address
+# this feels like a bit of a hacky fix, but im not exactly sure if i can do anything to fix it without changing org 0x0
+# and changing org 0x0 will make the file bigger afaik, which i would like to avoid
+
 gdt_code_descriptor:
 # code descriptor
 .word 0xffff # limit low
-.word 0 # base low
+.word 0x0500 # base low
 .byte 0 # base middle
 .byte 0b10011010 # access
 .byte 0b11001111 # granularity
@@ -89,7 +94,7 @@ gdt_code_descriptor:
 gdt_data_descriptor:
 # data descriptor
 .word 0xffff # limit low
-.word 0 # base low
+.word 0x0500 # base low
 .byte 0 # base middle
 .byte 0b10010010 # access
 .byte 0b11001111 # granularity
