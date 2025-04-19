@@ -60,7 +60,7 @@ main:
 
     # far jump into 32bit protected mode
     # this clears the prefetch queue and sets cs to the code descriptor
-    ljmp $0x0008, $pm_gateway
+    ljmp $0x0008, $enter_pm
 
 # GDT
 # each descriptor is exactly 8 bytes in size (one quad word)
