@@ -1,8 +1,6 @@
 .att_syntax
 .code16
 
-# TODO(nix3l): move the IO stuff to a separate file so i dont copy-paste the code like an idiot
-
 .org 0x0
 
 .global enter
@@ -81,6 +79,7 @@ gdt_null_descriptor:
 # we have to change the base address of the gdt so that it jumps to the correct address
 # this feels like a bit of a hacky fix, but im not exactly sure if i can do anything to fix it without changing org 0x0
 # and changing org 0x0 will make the file bigger afaik, which i would like to avoid
+# see https://stackoverflow.com/questions/9137947/assembler-jump-in-protected-mode-with-gdt?rq=4
 
 gdt_code_descriptor:
 # code descriptor
@@ -110,14 +109,24 @@ gdt_pointer:
 
 # FROM HERE ON CODE IS IN 32-bit PROTECTED MODE!!!
 .code32
+
+# not the most portable way but it works
+enable_a20:
+    mov $0xdd, %al
+    out %al, $0x64
+    ret
+
 enter_pm:
     # put the data descriptor into the data segments
     mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %ss
+    # TODO(nix3l): fs/gs?
     # stack now starts at 0x90000
     mov $0x90000, %esp
+
+    call enable_a20
 
 hang:
     jmp hang
