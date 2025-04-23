@@ -365,9 +365,9 @@ chs_head: .byte 0
 chs_sector: .byte 0
 
 data_start: .word 0
+cluster: .word 0
 
 stage2_filename: .ascii "LOADER  BIN"
-cluster: .word 0
 
 msg_greet: .asciz "boot start\r\n"
 msg_boot_fail: .asciz "failure\r\n"

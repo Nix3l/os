@@ -7,6 +7,16 @@
 enter:
     jmp main
 
+# not the most portable way but it works
+enable_a20:
+    cli # TODO(nix3l): is this necessary?
+    push %ax
+    mov $0xdd, %al
+    out %al, $0x64
+    pop %ax
+    sti
+    ret
+
 # prints a string to the screen in 16bit real mode
 # INPUTS:
 #   si => pointer to string
@@ -32,7 +42,284 @@ print_str16:
 	pop %si
 	ret
 
-msg_greet: .asciz "second stage loaded\r\n"
+boot_failure:
+    lea msg_boot_fail, %si
+    call print_str16
+.boot_failure_hang:
+    jmp .boot_failure_hang
+
+# FILE IO
+pSectorSize: 		.word 512 # size of sector (in bytes)
+pClusterSize: 	    .byte 1   # sectors per cluster (allocation unit)
+pReservedSectors: 	.word 1   # number of reserved sectors (only boot sector in this case)
+pFATCount: 		    .byte 2   # number of FATs
+pRootSize: 		    .word 224 # size of root directory (number of records/entries NOT sectors)
+pFATSize: 		    .word 9   # size of each FAT
+pSectorsPerTrack: 	.word 18  # sectors per cylinder
+pHeadCount: 	    .word 2   # number of heads
+pHiddenSectors: 	.int  0   # number of hidden sectors (in this case theres none)
+pBootDrive: 	    .byte 0   # holds the drive the boot sector came from
+
+.equ FAT_SEGMENT,   0x02c0
+.equ FAT_OFFSET,    0x0000
+
+.equ ROOT_SEGMENT,  0x0dad
+.equ ROOT_OFFSET,   0x0000
+
+root_size:  .word 0 # size of root in sectors
+root_start: .word 0 # sector of start of root dir
+root_end:   .word 0 # sector after end of root dir
+
+# NOTE(nix3l): this is almost identical to the boot.asm file io
+# so i wont be adding explanations to how this works. just check that file.
+
+# INPUTS:
+#   ax => LBA sector
+# OUTPUTS:
+#   chs_cylinder => cylinder
+#   chs_head => head
+#   chs_sector => sector 
+lba_to_chs:
+    push %ax
+    push %bx
+    push %cx
+    push %dx
+
+    xor %dx, %dx
+    mov pSectorsPerTrack, %bx
+    div %bx # ax = LBA / sectors per track
+            # dx = remainder
+
+    inc %dl
+    mov %dl, chs_sector # remainder + 1 = sector
+
+    xor %dx, %dx
+    mov pHeadCount, %bx
+    div %bx # ax = (LBA / sectors per track) / number of heads
+            # dx = remainder
+
+    mov %dl, chs_head
+    mov %al, chs_cylinder
+
+    pop %dx
+    pop %cx
+    pop %bx
+    pop %ax
+    ret
+
+# INPUTS:
+#   ax => cluster
+# OUTPUTS:
+#   ax => sector LBA
+get_cluster_lba:
+    push %bx
+    sub $2, %ax
+    xor %bx, %bx
+    mov pClusterSize, %bl
+    mul %bx
+    pop %bx
+    add root_end, %ax
+    ret
+
+reset_disk:
+    push %dx
+    push %ax
+    mov pBootDrive, %dl
+	xor %ax, %ax
+    int $0x13
+    jc boot_failure
+    pop %ax
+    pop %dx
+    ret
+
+# INPUTS:
+#   ax => sector LBA to read
+#   cx => number of sectors to read
+#   es:bx => memory address to load the memory into
+# OUTPUTS:
+#   es:bx => the start of the data read 
+read_sectors:
+.sector_loop:
+    push %di
+    mov $3, %di # allow 3 retries before failure
+    push %ax
+    push %cx
+    push %dx
+
+    call lba_to_chs
+
+    mov $0x0201, %ax # read function, read one sector
+    mov chs_cylinder, %ch # set cylinder
+    mov chs_head, %dh # set head
+    mov chs_sector, %cl # set sector to read
+    mov pBootDrive, %dl # set the drive
+
+.read_retry:
+    stc # set the carry bit
+    int $0x13
+    jnc .sector_done # if the carry bit is cleared, read success
+
+    call reset_disk
+    dec %di
+    test %di, %di
+    jnz .read_retry # retry 3 times before failing
+
+.read_fail:
+    jmp boot_failure
+
+.sector_done:
+    pop %dx
+    pop %cx
+    pop %ax
+    inc %ax # move to the next sector's LBA
+    pop %di
+    add pSectorSize, %bx # advance the memory pointer by 1 sector
+    loop .sector_loop
+    ret
+
+# INPUTS:
+#   ax => cluster number
+#   es:bx => memory location to read to
+# OUTPUTS:
+#   es:bx => cluster sector data
+load_cluster:
+    push %ax
+    push %bx
+    push %cx
+
+    call get_cluster_lba
+
+    xor %cx, %cx
+    mov pClusterSize, %cl
+    call read_sectors
+
+    pop %cx
+    pop %bx
+    pop %ax
+    ret
+
+load_root_directory:
+    push %ax
+    push %bx
+    push %cx
+    push %dx
+    push %es
+
+    # get the root directory size in sectors in cx
+    xor %ax, %ax
+    xor %dx, %dx
+    mov pRootSize, %ax
+    mov $32, %bx # 32 bytes per entry
+    mul %bx # 32 * [root size] entries
+    mov pSectorSize, %bx
+    div %bx # (32 * [root size] entries) / [sector size]
+    mov %ax, %cx # put result in cx
+    mov %cx, root_size
+
+    # get the root directory location in ax
+    xor %ax, %ax
+    mov pFATCount, %al
+    mov pFATSize, %bx
+    mul %bx # FAT size * FAT
+
+    add pReservedSectors, %ax # + reserved sectors (bootloader)
+
+    mov %ax, %bx
+    mov %bx, root_start
+    add %cx, %bx
+    mov %bx, root_end
+
+    push $ROOT_SEGMENT
+    pop %es
+    mov $ROOT_OFFSET, %bx
+
+    call read_sectors
+
+    pop %es
+    pop %dx
+    pop %cx
+    pop %bx
+    pop %ax
+    ret
+    
+load_fats:
+    push %ax
+    push %bx
+    push %cx
+    push %es
+
+    mov pReservedSectors, %ax
+    mov pFATSize, %cx
+    push $FAT_SEGMENT
+    pop %es
+    mov $FAT_OFFSET, %bx
+
+    call read_sectors
+
+    pop %es
+    pop %cx
+    pop %bx
+    pop %ax
+    ret
+
+# INPUTS:
+#   ds:si => filename
+# OUTPUTS:
+#   ax => first cluster number
+find_file:
+    push %cx
+    push %di
+    push %es
+
+    mov pRootSize, %cx # if we reach 0 entries, not found
+
+    push $ROOT_SEGMENT
+    pop %es
+
+    mov $ROOT_OFFSET, %di
+.next_entry:
+    push %si
+    lea msg_greet, %si
+    call print_str16
+    pop %si
+
+    push %cx
+    mov $11, %cx # filenames are all exactly 11 chars long
+
+    push %si
+    push %di
+    rep cmpsb # check filename
+    pop %di
+    pop %si
+
+    jz .file_found
+    pop %cx
+    add $32, %di # move to the next entry
+                 # each entry is 32 bytes, so just move the pointer by 32 bytes
+    loop .next_entry
+    jmp boot_failure # if stage 2 was not found, boot has failed
+
+.file_found:
+    mov %es:26(%di), %ax
+
+    pop %es
+    pop %cx
+    pop %di
+    ret
+
+chs_cylinder: .byte 0
+chs_head:     .byte 0
+chs_sector:   .byte 0
+
+curr_cluster:    .word 0
+file_data_start: .word 0
+
+msg_greet: .asciz "entered second stage\r\n"
+msg_boot_fail: .asciz "--------------------\r\n!!! BOOT FAILURE !!!\r\n--------------------\r\n"
+msg_finish_loading: .asciz "loaded kernel\r\n"
+
+kernel_filename: .ascii "KERNEL  BIN"
+kernel_size: .word 0 # size in sectors
 
 main:
     cli
@@ -47,7 +334,16 @@ main:
     lea msg_greet, %si
     call print_str16
 
+    call enable_a20
+
+    call load_root_directory
+    call load_fats
+
+    lea kernel_filename, %si
+    call find_file
+
     # TODO(nix3l): load the kernel
+    # call load_kernel
 
 prepare_32pm:
     # enter 32-bit protected mode
@@ -204,7 +500,7 @@ update_hardware_cursor: # FIXME
 
 # clears the entire screen to black
 clear_screen:
-    push %eax
+    push %eax # TODO(nix3l): shouldnt this be ecx?
     push %edi
 
     mov $0, cursor_x
@@ -315,13 +611,6 @@ print_str32:
     pop %esi
     ret
 
-# not the most portable way but it works
-# TODO(nix3l): if needed, change to something more portable
-enable_a20:
-    mov $0xdd, %al
-    out %al, $0x64
-    ret
-
 enter_pm:
     # put the data descriptor into the data segments
     mov $0x10, %ax
@@ -331,8 +620,6 @@ enter_pm:
     # TODO(nix3l): fs/gs?
     # stack now starts at 0x90000
     mov $0x90000, %esp
-
-    call enable_a20
 
     xor %eax, %eax
     xor %ebx, %ebx

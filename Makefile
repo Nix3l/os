@@ -35,10 +35,14 @@ ${BUILD_DIR}/loader.out: ${BUILD_DIR}/loader.o
 ${BUILD_DIR}/loader.bin: ${BUILD_DIR}/loader.out
 	${OBJCOPY} -O binary -j .text $^ $@
 
-${BUILD_DIR}/disk.img: ${BUILD_DIR}/boot.bin ${BUILD_DIR}/loader.bin
+${BUILD_DIR}/kernel.bin:
+	echo "yes this is totally the kernel guys trust me" > $@
+
+${BUILD_DIR}/disk.img: ${BUILD_DIR}/boot.bin ${BUILD_DIR}/loader.bin ${BUILD_DIR}/kernel.bin
 	dd if=/dev/zero of=$@ bs=512 count=2880
 	mkfs.fat -F12 -n "VOLUME" $@
 	mcopy -i $@ ${BUILD_DIR}/loader.bin "::loader.bin"
+	mcopy -i $@ ${BUILD_DIR}/kernel.bin "::kernel.bin"
 	dd if=$< of=$@ conv=notrunc # when this is done, for some reason it stops being considered a fat12 fs??? idk
 								# doing it after copying the files works so i dont really care to fix it
 
