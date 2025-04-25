@@ -308,7 +308,7 @@ load_second_stage:
     jnz .odd_cluster
 
 .even_cluster:
-    and $0b0000111111111111, %dx
+    and $0x0fff, %dx
     jmp .load_cluster
 .odd_cluster:
     shr $4, %dx

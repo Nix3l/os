@@ -36,7 +36,7 @@ ${BUILD_DIR}/loader.bin: ${BUILD_DIR}/loader.out
 	${OBJCOPY} -O binary -j .text $^ $@
 
 ${BUILD_DIR}/kernel.bin:
-	echo "yes this is totally the kernel guys trust me" > $@
+	echo "yes this is totally the kernel guys trust meiuspnnpvdsnjsvdknjdvsknjsvdknjvdsnkjsvdnkjvsnjpkvdsknjvdsnkjdvsnjpvdsnjdvsjpksvdnkpjvdsnkpjdvsnkjdvsnkjdvsnkjpdvsnkjpdvsnjpkdvsnpkjvdsnjpkvdsnpkjvdsnjpkvdsnjpkvdsnjpkvdsjnpkvdsnjpkvdsjnpkvdsjnpkvdsnjpkdvsnjpkdvsjnpvdsnjpdvsjnpkdvsjnpkdvsjnpkdvsnjpkdvsnjdvsnjpkdvsnjpkvdsnjpkdvsnjpkdvsnjkdvsnjpkvdsnjpkvdsnjpkdvsnjkpvdsnjpkdvsnjpkvdsnjpkvdsnjpkdvsnjpkdvsnjpkdvsnjdvsnjpkvdsnjpkdvsjnpdvsnjpkvdsnjpkdvsnjpkvdsnjpkvdsnjpkvdsnjpkvdsnjpkvdsnjpkvdsnjpkdvsnjpkdvsnjpkvdsnjpkdvsnjkpdvsnjvdsnjkpdvnjpkvdsnjdvsnjpkvdsnpkjvdsnpkjdsvnjpkvdsnjpkvdsnjpkdvsnjpkdvsnjpkdsvnjdsvnjpkdvsnjpkdvsjnpkdsvnjpkdvsnjpkdvsjnsdvnjpkdsvnjpkdsvnjpkdsvnjsdnjksdnjpksdvnpdsvnjkjndvsnjdvsnjpkdvsjnpdvsnjsdnpkjsvdnkjsdvnjjdnpkvnjkpvdsnjskpvdnjdsvjnkvdsjndsvnjpdsvnjjndvsjnpkvdspnjsvdnjpkdvsnjpdsvnpjdsvnjndpvsnjpkdvsnjdsvnjkdsvnjkdsnvkjppndksvjnjpkdvsnjpkdsvnjdnsjdsvjnnjdsvnjdpkvsjndvsnjndvsjsvdpknjnvdskjpsdnpsjdknvspjkdnvskdpjnvspkjdnvkpsndvpsjndvspjkndvjspkdnvspkjdnvspkjndvspkjdnvspkndv" > $@
 
 ${BUILD_DIR}/disk.img: ${BUILD_DIR}/boot.bin ${BUILD_DIR}/loader.bin ${BUILD_DIR}/kernel.bin
 	dd if=/dev/zero of=$@ bs=512 count=2880

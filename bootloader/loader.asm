@@ -60,11 +60,17 @@ pHeadCount: 	    .word 2   # number of heads
 pHiddenSectors: 	.int  0   # number of hidden sectors (in this case theres none)
 pBootDrive: 	    .byte 0   # holds the drive the boot sector came from
 
-.equ FAT_SEGMENT,   0x02c0
-.equ FAT_OFFSET,    0x0000
+.equ FAT_SEGMENT,  0x02c0
+.equ FAT_OFFSET,   0x0000
 
-.equ ROOT_SEGMENT,  0x0dad
-.equ ROOT_OFFSET,   0x0000
+.equ ROOT_SEGMENT, 0x0dad
+.equ ROOT_OFFSET,  0x0000
+
+.equ KERNEL_TEMP_SEGMENT, 0x3000
+.equ KERNEL_TEMP_OFFSET,  0x0000
+
+.equ KERNEL_SEGMENT, 0x100000
+.equ KERNEL_OFFSET,  0x0
 
 root_size:  .word 0 # size of root in sectors
 root_start: .word 0 # sector of start of root dir
@@ -278,11 +284,6 @@ find_file:
 
     mov $ROOT_OFFSET, %di
 .next_entry:
-    push %si
-    lea msg_greet, %si
-    call print_str16
-    pop %si
-
     push %cx
     mov $11, %cx # filenames are all exactly 11 chars long
 
@@ -305,6 +306,81 @@ find_file:
     pop %es
     pop %cx
     pop %di
+    ret
+
+# INPUTS:
+#   ax => starting cluster number
+#   es:bx => address to read to
+# OUTPUTS:
+#   cx => size in sectors
+load_file:
+    push %ax
+    push %dx
+
+    mov %ax, curr_cluster # store the index of the first cluster
+    xor %cx, %cx
+
+# read the cluster sectors into memory
+.next_cluster:
+    mov curr_cluster, %ax
+    call load_cluster
+
+    push %bx
+    push %es
+
+    inc %cx
+    push %cx
+
+    mov %ax, %cx
+    mov %ax, %dx
+    shr $1, %dx # divide by 2 (shift right)
+    add %dx, %cx # cx = offset from fat to the cluster number
+
+    push $FAT_SEGMENT
+    pop %es
+
+    mov $FAT_OFFSET, %bx
+    add %cx, %bx
+
+    # next cluster in dx
+    # gotta load each byte separately though i guess
+    # TODO(nix3l): shouldnt these be the other way around?
+    mov %es:(%bx), %dl
+    mov %es:1(%bx), %dh
+
+    # what using FAT12 does
+    # have to mask the number, because we load 16 bits
+    # but only use the upper/lower 12 bits
+    test $0x0001, %ax
+    jnz .odd_cluster
+
+.even_cluster:
+    and $0x0fff, %dx
+    jmp .load_cluster
+.odd_cluster:
+    shr $4, %dx
+
+.load_cluster:
+    pop %cx
+    pop %es
+    pop %bx
+
+    mov %dx, curr_cluster
+    cmp $0x0ff0, %dx
+
+    jge .finished_loading
+
+    # TODO(nix3l): technically this should be pSectorSize * pClusterSize
+    # but every cluster is only 1 sector already and that is never changing so who cares
+    add pSectorSize, %bx
+    jmp .next_cluster
+
+.finished_loading:
+    lea msg_finish_loading, %si
+    call print_str16
+
+    pop %dx
+    pop %ax
     ret
 
 chs_cylinder: .byte 0
@@ -341,6 +417,12 @@ main:
 
     lea kernel_filename, %si
     call find_file
+
+    push $KERNEL_TEMP_SEGMENT
+    pop %es
+    mov $KERNEL_TEMP_OFFSET, %bx
+    call load_file
+    mov %cx, kernel_size
 
     # TODO(nix3l): load the kernel
     # call load_kernel
@@ -636,6 +718,18 @@ enter_pm:
     mov $COL_CYAN, %ebx
     lea msg_greet32, %esi
     call print_str32
+
+    #mov kernel_size, %eax
+    #xor %ebx, %ebx
+    #mov pSectorSize, %bx
+    #mul %ebx
+    #mov $4, %ebx
+    #div %ebx
+    #cld
+    #mov $KERNEL_TEMP_SEGMENT, %esi
+    #mov $KERNEL_SEGMENT, %edi
+    #mov %eax, %ecx
+    #rep movsd
 
 hang:
     jmp hang
