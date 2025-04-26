@@ -1,6 +1,9 @@
 .att_syntax
 .code16
 
+# TODO(nix3l): this thing is awfully bad
+#   => fix the gdt so i dont have to offset by 0x500 in the code descriptor
+
 .org 0x0
 
 .global enter
@@ -452,6 +455,7 @@ prepare_32pm:
 # parts that can either be used as data or as code for execution. protected mode stuff.
 # explanation of the layout and usage of the segment descriptors is also in the given link.
 
+# FIXME
 start_of_gdt:
 gdt_null_descriptor:
 # null descriptor
@@ -730,6 +734,8 @@ enter_pm:
     mov $COL_CYAN, %ebx
     lea msg_greet32, %esi
     call print_str32
+
+    call %cs:KERNEL_TARGET
 
 hang:
     jmp hang
