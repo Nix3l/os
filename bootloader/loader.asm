@@ -66,15 +66,17 @@ pBootDrive: 	    .byte 0   # holds the drive the boot sector came from
 .equ ROOT_SEGMENT, 0x0dad
 .equ ROOT_OFFSET,  0x0000
 
-.equ KERNEL_TEMP_SEGMENT, 0x3000
-.equ KERNEL_TEMP_OFFSET,  0x0000
+.equ KERNEL_TEMP_SEGMENT, 0x0000
+.equ KERNEL_TEMP_OFFSET,  0x3000
 
-.equ KERNEL_SEGMENT, 0x100000
-.equ KERNEL_OFFSET,  0x0
+.equ KERNEL_TARGET, 0x100000
 
 root_size:  .word 0 # size of root in sectors
 root_start: .word 0 # sector of start of root dir
 root_end:   .word 0 # sector after end of root dir
+
+kernel_rmode_base: .long KERNEL_TEMP_SEGMENT * 16 + KERNEL_TEMP_OFFSET
+kernel_pmode_base: .long KERNEL_TARGET
 
 # NOTE(nix3l): this is almost identical to the boot.asm file io
 # so i wont be adding explanations to how this works. just check that file.
@@ -303,9 +305,10 @@ find_file:
 .file_found:
     mov %es:26(%di), %ax
 
-    pop %es
     pop %cx
+    pop %es
     pop %di
+    pop %cx
     ret
 
 # INPUTS:
@@ -401,6 +404,9 @@ main:
     cli
     mov %cs, %ax
     mov %ax, %ds
+
+    lgdt gdt_pointer
+    call enable_a20
     sti
 
     # change the vga mode
@@ -409,8 +415,6 @@ main:
 
     lea msg_greet, %si
     call print_str16
-
-    call enable_a20
 
     call load_root_directory
     call load_fats
@@ -424,15 +428,10 @@ main:
     call load_file
     mov %cx, kernel_size
 
-    # TODO(nix3l): load the kernel
-    # call load_kernel
-
 prepare_32pm:
     # enter 32-bit protected mode
     # we want interrupts off for this or the processor might triple fault
     cli
-
-    lgdt gdt_pointer
 
     # set the first bit in cr0,
     # which informs the cpu that we are going to protected mode
@@ -490,7 +489,7 @@ gdt_pointer:
     # took me a while to figure this out
     # have to change to linear address from segment:offset
     # we know this is loaded at 0x0500 so just add that and we are fine
-    .long 0x0500 + start_of_gdt
+    .long 0x500 + start_of_gdt
 
 # FROM HERE ON CODE IS IN 32-bit PROTECTED MODE!!!
 .code32
@@ -516,11 +515,11 @@ gdt_pointer:
 .equ COL_LBROWN,    0x0e
 .equ COL_WHITE,     0x0f
 
-cursor_x: .byte 0
-cursor_y: .byte 0
+cursor_x: .word 0
+cursor_y: .word 0
 background_col: .byte 0
 
-msg_greet32: .asciz "ayo we printing strings now? in 32 bit pm??? insane"
+msg_greet32: .asciz "handing over control to the kernel"
 
 # gets the offset to the screen cursor according to cursor_x and cursor_y
 # offset = x + y * screen_width
@@ -533,14 +532,14 @@ get_cursor_offset:
     xor %eax, %eax
     xor %ebx, %ebx
 
-    mov $SCREEN_WIDTH, %al
-    mov cursor_y, %bl
+    mov $SCREEN_WIDTH, %ax
+    mov cursor_y, %bx
     mul %ebx
 
-    mov cursor_x, %bl
+    mov cursor_x, %bx
     add %ebx, %eax
 
-    mov $2, %bl
+    mov $2, %bx
     mul %ebx
 
     pop %ebx
@@ -583,6 +582,7 @@ update_hardware_cursor: # FIXME
 # clears the entire screen to black
 clear_screen:
     push %eax # TODO(nix3l): shouldnt this be ecx?
+    push %ecx
     push %edi
 
     mov $0, cursor_x
@@ -601,6 +601,7 @@ clear_screen:
     loop .clear_screen_loop
 
     pop %edi
+    pop %ecx
     pop %eax
     ret
 
@@ -613,18 +614,18 @@ increment_cursor:
     xor %eax, %eax
     xor %ebx, %ebx
 
-    mov cursor_x, %al
-    mov cursor_y, %bl
+    mov cursor_x, %ax
+    mov cursor_y, %bx
 
-    inc %al
-    cmp $SCREEN_WIDTH, %al
+    inc %ax
+    cmp $SCREEN_WIDTH, %ax
     jl .increment_cursor_finish
 
     # at the right edge of the screen, go to next line
-    xor %al, %al
+    xor %ax, %ax
 
-    inc %bl
-    cmp $SCREEN_HEIGHT, %bl
+    inc %bx
+    cmp $SCREEN_HEIGHT, %bx
     jl .increment_cursor_finish
 
     # at bottom left corner, loop back to top left
@@ -632,8 +633,8 @@ increment_cursor:
     xor %ebx, %ebx
 
 .increment_cursor_finish:
-    mov %al, cursor_x
-    mov %bl, cursor_y
+    mov %ax, cursor_x
+    mov %bx, cursor_y
     call update_hardware_cursor
 
     pop %ebx
@@ -695,41 +696,40 @@ print_str32:
 
 enter_pm:
     # put the data descriptor into the data segments
-    mov $0x10, %ax
+    mov $0x0010, %ax
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %ss
-    # TODO(nix3l): fs/gs?
+    mov %ax, %fs
+    mov %ax, %gs
     # stack now starts at 0x90000
     mov $0x90000, %esp
-
-    xor %eax, %eax
-    xor %ebx, %ebx
-    xor %ecx, %ecx
-    xor %edx, %edx
-    xor %edi, %edi
-    xor %esi, %esi
 
     call clear_screen
 
     # NOTE(nix3l): for some reason if you set cursor_y before cursor_x weird stuff happens
     # im not bothered to fix it honestly
 
+    # move the kernel over to the address we want
+    xor %eax, %eax
+    xor %ebx, %ebx
+
+    mov %cs:kernel_size, %ax
+    mov %cs:pSectorSize, %bx
+    mul %bx
+
+    mov $4, %bx # we move 4 bytes at a time, so divide by 4
+    div %bx
+
+    cld
+    mov %cs:kernel_rmode_base, %esi
+    mov %cs:kernel_pmode_base, %edi
+    mov %eax, %ecx
+    rep movsd
+
     mov $COL_CYAN, %ebx
     lea msg_greet32, %esi
     call print_str32
-
-    #mov kernel_size, %eax
-    #xor %ebx, %ebx
-    #mov pSectorSize, %bx
-    #mul %ebx
-    #mov $4, %ebx
-    #div %ebx
-    #cld
-    #mov $KERNEL_TEMP_SEGMENT, %esi
-    #mov $KERNEL_SEGMENT, %edi
-    #mov %eax, %ecx
-    #rep movsd
 
 hang:
     jmp hang
